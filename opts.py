@@ -80,9 +80,6 @@ def parse_opts():
         type=float,
         help=
         'Initial learning rate (divided by 10 while training by lr scheduler)')
-    parser.add_argument('--momentum', default=0.9, type=float, help='Momentum')
-    parser.add_argument(
-        '--dampening', default=0.9, type=float, help='dampening of SGD')
     parser.add_argument(
         '--weight_decay', default=1e-3, type=float, help='Weight Decay')
     parser.add_argument(
@@ -101,9 +98,6 @@ def parse_opts():
         action='store_true',
         help='If true, inputs are normalized by standard deviation.')
     parser.set_defaults(std_norm=False)
-    parser.add_argument(
-        '--nesterov', action='store_true', help='Nesterov momentum')
-    parser.set_defaults(nesterov=False)
     parser.add_argument(
         '--optimizer',
         default='sgd',
@@ -227,7 +221,16 @@ def parse_opts():
         help='ResNeXt cardinality')
     parser.add_argument(
         '--manual_seed', default=1, type=int, help='Manually set random seed')
-
+    parser.add_argument(
+        '--optuna_trials',
+        default=0,
+        type=int,
+        help='Optuna trials')
+    parser.add_argument(
+        '--feature_path',
+        default='/data/data_wedding/results/segment_to_feature.json',
+        type=str,
+        help='The path of segment_to_feature.json')
     args = parser.parse_args()
 
     return args

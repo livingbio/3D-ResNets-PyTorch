@@ -1,0 +1,24 @@
+numpy
+pillow
+torch==1.0.0
+torchvision
+tqdm
+tensorboardx
+
+# Hyperparameter Optimization Framework: https://optuna.org/
+optuna
+
+# GradientBoostingClassifier
+sklearn
+matplotlib
+
+# Python imbalanced-learn module
+imblearn
+
+# Light GBM
+lightgbm
+
+# Video Augmentation https://github.com/okankop/vidaug
+opencv-python
+scikit-image
+git+https://github.com/okankop/vidaug

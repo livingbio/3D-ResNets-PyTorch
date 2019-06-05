@@ -1,10 +1,12 @@
 import torch
-from torch.autograd import Variable
 import time
 import os
 import sys
+import math
 
 from utils import AverageMeter, calculate_accuracy
+
+from tensorboardX import SummaryWriter
 
 
 def train_epoch(epoch, data_loader, model, criterion, optimizer, opt,
@@ -19,18 +21,21 @@ def train_epoch(epoch, data_loader, model, criterion, optimizer, opt,
     accuracies = AverageMeter()
 
     end_time = time.time()
+
+    write_embedding = True
+    writer = None
+    embedding_log = 20
+
     for i, (inputs, targets) in enumerate(data_loader):
         data_time.update(time.time() - end_time)
 
         if not opt.no_cuda:
             targets = targets.cuda(async=True)
-        inputs = Variable(inputs)
-        targets = Variable(targets)
         outputs = model(inputs)
         loss = criterion(outputs, targets)
         acc = calculate_accuracy(outputs, targets)
 
-        losses.update(loss.data[0], inputs.size(0))
+        losses.update(loss.item(), inputs.size(0))
         accuracies.update(acc, inputs.size(0))
 
         optimizer.zero_grad()
@@ -62,6 +67,18 @@ def train_epoch(epoch, data_loader, model, criterion, optimizer, opt,
                   loss=losses,
                   acc=accuracies))
 
+        if write_embedding and epoch % embedding_log == 0:
+            if writer is None:
+                writer = SummaryWriter(comment='_embedding_train_'+str(i))
+            n_iter = (epoch * len(data_loader)) + i
+            middle_frame = math.floor(inputs.data.shape[2] / 2)
+            writer.add_embedding(
+                outputs.data,
+                metadata=targets.data,
+                label_img=torch.squeeze(
+                    inputs.data[:, :, middle_frame, :, :], 2),
+                global_step=n_iter)
+
     epoch_logger.log({
         'epoch': epoch,
         'loss': losses.avg,
@@ -79,3 +96,5 @@ def train_epoch(epoch, data_loader, model, criterion, optimizer, opt,
             'optimizer': optimizer.state_dict(),
         }
         torch.save(states, save_file_path)
+
+    return epoch, losses.avg, accuracies.avg

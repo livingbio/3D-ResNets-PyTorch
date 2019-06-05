@@ -1,6 +1,7 @@
 import os
 import sys
 import json
+import math
 import numpy as np
 import torch
 from torch import nn
@@ -17,13 +18,23 @@ from temporal_transforms import LoopPadding, TemporalRandomCrop
 from target_transforms import ClassLabel, VideoID
 from target_transforms import Compose as TargetCompose
 from dataset import get_training_set, get_validation_set, get_test_set
-from utils import Logger
+from utils import Logger, ImbalancedDatasetSampler
 from train import train_epoch
 from validation import val_epoch
 import test
 
-if __name__ == '__main__':
+from tensorboardX import SummaryWriter
+
+import optuna
+
+
+def objective(trial):
     opt = parse_opts()
+
+    if trial:
+        opt.weight_decay = trial.suggest_uniform('weight_decay', 0.01, 0.1)
+        opt.learning_rate = trial.suggest_uniform('learning_rate', 1-5, 1-4)
+
     if opt.root_path != '':
         opt.video_path = os.path.join(opt.root_path, opt.video_path)
         opt.annotation_path = os.path.join(opt.root_path, opt.annotation_path)
@@ -57,6 +68,8 @@ if __name__ == '__main__':
     else:
         norm_method = Normalize(opt.mean, opt.std)
 
+    # norm_method = Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+
     if not opt.no_train:
         assert opt.train_crop in ['random', 'corner', 'center']
         if opt.train_crop == 'random':
@@ -78,7 +91,9 @@ if __name__ == '__main__':
         train_loader = torch.utils.data.DataLoader(
             training_data,
             batch_size=opt.batch_size,
-            shuffle=True,
+            # sampler option is mutually exclusive with shuffle
+            shuffle=False,
+            sampler=ImbalancedDatasetSampler(training_data),
             num_workers=opt.n_threads,
             pin_memory=True)
         train_logger = Logger(
@@ -88,19 +103,10 @@ if __name__ == '__main__':
             os.path.join(opt.result_path, 'train_batch.log'),
             ['epoch', 'batch', 'iter', 'loss', 'acc', 'lr'])
 
-        if opt.nesterov:
-            dampening = 0
-        else:
-            dampening = opt.dampening
-        optimizer = optim.SGD(
-            parameters,
-            lr=opt.learning_rate,
-            momentum=opt.momentum,
-            dampening=dampening,
-            weight_decay=opt.weight_decay,
-            nesterov=opt.nesterov)
-        scheduler = lr_scheduler.ReduceLROnPlateau(
-            optimizer, 'min', patience=opt.lr_patience)
+        optimizer = optim.Adam(
+            parameters, lr=opt.learning_rate, weight_decay=opt.weight_decay)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer, verbose=True, factor=0.1 ** 0.5)
     if not opt.no_val:
         spatial_transform = Compose([
             Scale(opt.sample_size),
@@ -115,6 +121,7 @@ if __name__ == '__main__':
             validation_data,
             batch_size=opt.batch_size,
             shuffle=False,
+            sampler=ImbalancedDatasetSampler(validation_data),
             num_workers=opt.n_threads,
             pin_memory=True)
         val_logger = Logger(
@@ -131,16 +138,24 @@ if __name__ == '__main__':
             optimizer.load_state_dict(checkpoint['optimizer'])
 
     print('run')
+    writer = SummaryWriter(
+        comment=f"_wd{opt.weight_decay}_lr{opt.learning_rate}_ft_begin{opt.ft_begin_index}_pretrain{not opt.pretrain_path == ''}")
     for i in range(opt.begin_epoch, opt.n_epochs + 1):
         if not opt.no_train:
-            train_epoch(i, train_loader, model, criterion, optimizer, opt,
-                        train_logger, train_batch_logger)
+            epoch, losses_avg, accuracies_avg = train_epoch(i, train_loader, model, criterion, optimizer, opt,
+                                                            train_logger, train_batch_logger)
+            writer.add_scalar('loss/train', losses_avg, epoch)
+            writer.add_scalar('acc/train', accuracies_avg, epoch)
+
         if not opt.no_val:
-            validation_loss = val_epoch(i, val_loader, model, criterion, opt,
-                                        val_logger)
+            epoch, val_losses_avg, val_accuracies_avg = val_epoch(i, val_loader, model, criterion, opt,
+                                                                  val_logger)
+            writer.add_scalar('loss/val', val_losses_avg, epoch)
+            writer.add_scalar('acc/val', val_accuracies_avg, epoch)
 
         if not opt.no_train and not opt.no_val:
-            scheduler.step(validation_loss)
+            scheduler.step(val_losses_avg)
+        print('=' * 100)
 
     if opt.test:
         spatial_transform = Compose([
@@ -160,3 +175,23 @@ if __name__ == '__main__':
             num_workers=opt.n_threads,
             pin_memory=True)
         test.test(test_loader, model, opt, test_data.class_names)
+
+    writer.close()
+    return val_losses_avg
+
+
+def main():
+    opt = parse_opts()
+    print('=' * 100)
+    print(f'OPTUNA_TRIALS = {opt.optuna_trials}')
+    print('=' * 100)
+    if opt.optuna_trials:
+        study = optuna.create_study()
+        study.optimize(objective, n_trials=opt.optuna_trials)
+        print(study.best_params)
+    else:
+        objective(None)
+
+
+if __name__ == '__main__':
+    main()
